@@ -1,4 +1,4 @@
-name: Build Kernel
+name: Build Kernel end release
 
 on:
   workflow_dispatch:
