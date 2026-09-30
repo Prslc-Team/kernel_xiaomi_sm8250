@@ -5568,7 +5568,7 @@ static void usbpd_pdo_workfunc(struct work_struct *w)
 				if (max_volt >= 20000)
 					pd->is_support_2s = true;
 			}
-			if (pps_max_watts < max_volt * max_curr) {
+			if ((PD_APDO_MAX_VOLT(pdo) * 100 <= 11000) && pps_max_watts < max_volt * max_curr) {
 				pps_max_watts = max_volt * max_curr;
 				if(pps_max_watts >120000000 && pps_max_watts < 130000000)
 					pps_max_watts = 120000000;
@@ -5584,16 +5584,16 @@ static void usbpd_pdo_workfunc(struct work_struct *w)
 				(PD_SRC_PDO_TYPE(pdo) == PD_SRC_PDO_TYPE_AUGMENTED) ? "PPS" : "PD2.0",
 				max_volt, min_volt, max_curr);
 	}
-
+	//usbpd_err(&pd->dev, "huangrui add pps_max_watts[%d],pd->apdo_max:%d\n", pps_max_watts / 1000  / 1000,pd->apdo_max);
 	if (pd->verifed) {
 		pps_max_mwatt = pps_max_watts / 1000  / 1000;
-		if (pps_max_mwatt != pd->apdo_max) {
-			pd->apdo_max = pps_max_mwatt;
-			val.intval = pps_max_mwatt;
-			power_supply_set_property(pd->usb_psy,
-					POWER_SUPPLY_PROP_APDO_MAX, &val);
-			usbpd_err(&pd->dev, "pps_max_watts[%d]\n", pps_max_mwatt);
-		}
+		//if (pps_max_mwatt != pd->apdo_max) {
+		pd->apdo_max = pps_max_mwatt;
+		val.intval = pps_max_mwatt;
+		power_supply_set_property(pd->usb_psy,
+				POWER_SUPPLY_PROP_APDO_MAX, &val);
+		usbpd_err(&pd->dev, "pps_max_watts[%d]\n", pps_max_mwatt);
+		//}
 	}
 
 	if (pd->batt_2s) {
