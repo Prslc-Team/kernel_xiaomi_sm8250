@@ -8896,6 +8896,7 @@ struct quick_charge adapter_cap[11] = {
 	{0, 0},
 };
 
+#define WIRE_SUPER_POWER_MAX		50
 #define ADAPTER_PWR_NONE              0x0
 #define ADAPTER_XIAOMI_QC3_PWR_20W    0x9
 #define ADAPTER_XIAOMI_PD_PWR_20W     0xa
@@ -8908,6 +8909,9 @@ int smblib_get_quick_charge_type(struct smb_charger *chg)
 {
 	int i = 0, rc;
 	int tx_adapter = 0, wls_online = 0;
+	int power_max = 0;
+	int quick_charge_type = 0;
+	static bool update = false;
 	union power_supply_propval pval = {0, };
 
 	if (!chg) {
@@ -8925,8 +8929,23 @@ int smblib_get_quick_charge_type(struct smb_charger *chg)
 	}
 
 	if ((chg->real_charger_type == POWER_SUPPLY_TYPE_USB_PD) && chg->pd_verifed) {
-		return QUICK_CHARGE_TURBE;
+		power_max = smblib_get_adapter_power_max(chg);
+		if (power_max >= WIRE_SUPER_POWER_MAX)
+			quick_charge_type = QUICK_CHARGE_SUPER;
+		else
+			quick_charge_type = QUICK_CHARGE_TURBE;
+
+		if (chg->usb_psy && !update) {
+			pr_info("quick_charge_type:%d power_max:%d\n",
+					quick_charge_type, power_max);
+			power_supply_changed(chg->usb_psy);
+			update = true;
+		}
+
+		return quick_charge_type;
 	}
+
+	update = false;
 
 	if (chg->is_qc_class_b || chg->real_charger_type == POWER_SUPPLY_TYPE_USB_HVDCP_3P5)
 		return QUICK_CHARGE_FLASH;
@@ -8965,6 +8984,20 @@ int smblib_get_quick_charge_type(struct smb_charger *chg)
 #define WLS_POWER_20W	20
 #define WLS_POWER_30W	30
 #define WLS_POWER_50W	50
+
+enum apdo_max_power {
+	APDO_MAX_30W = 30, // J2 G7A F4 and some old projects use 30W pps charger
+	APDO_MAX_33W = 33,   // most 33W project use 33w pps charger
+	APDO_MAX_40W = 40,   // only F1X use 40w pps charger
+	APDO_MAX_50W = 50,   // only j1(cmi project) use 50W pps(device support maxium 50w)
+	APDO_MAX_55W = 55, // K2 K9B use 55w pps charger
+	APDO_MAX_65W = 65, //we have 65w pps which for j1(cmi), and also used for 120w(67w works in 65w)
+	APDO_MAX_67W = 67, //most useage now for dual charge pumps projects such as L3 L1 L1A L18
+	APDO_MAX_100W = 100, // Zimi car quick charger have 100w pps
+	APDO_MAX_120W = 120, // L2 L10 and K8 L11 use 120W
+	APDO_MAX_INVALID = 67,
+};
+
 int smblib_get_adapter_power_max(struct smb_charger *chg)
 {
 	int rc;
@@ -9015,8 +9048,18 @@ int smblib_get_adapter_power_max(struct smb_charger *chg)
 			rc = power_supply_get_property(chg->usb_psy,
 						POWER_SUPPLY_PROP_APDO_MAX, &pval);
 			apdo_max = pval.intval;
-			/*pr_info("apdo_max:%d\n", apdo_max);*/
-			return apdo_max;
+			pr_info("apdo_max:%d\n", apdo_max);
+
+			if (apdo_max == 65)
+				return APDO_MAX_65W; /* only for J1 65W adapter */
+			else if (apdo_max >= 60)
+				return APDO_MAX_67W;
+			else if (apdo_max >= 55 && apdo_max < 60)
+				return APDO_MAX_55W;
+			else if (apdo_max >= 50 && apdo_max < 55)
+				return APDO_MAX_50W;
+			else
+				return apdo_max;
 		}
 	}
 
