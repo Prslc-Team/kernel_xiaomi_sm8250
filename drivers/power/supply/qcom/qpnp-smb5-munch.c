@@ -3021,6 +3021,7 @@ static enum power_supply_property smb5_batt_props[] = {
 	POWER_SUPPLY_PROP_RECHARGE_SOC,
 	POWER_SUPPLY_PROP_RECHARGE_VBAT,
 	POWER_SUPPLY_PROP_NIGHT_CHARGING,
+	POWER_SUPPLY_PROP_SMART_BATTERY,
 	POWER_SUPPLY_PROP_CHARGE_FULL,
 	POWER_SUPPLY_PROP_FORCE_RECHARGE,
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
@@ -3218,6 +3219,9 @@ static int smb5_batt_get_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_NIGHT_CHARGING:
 		rc = smblib_night_charging_func(chg, val);
 		break;
+	case POWER_SUPPLY_PROP_SMART_BATTERY:
+		val->intval = chg->diff_fv_val;
+		break;
 	default:
 		pr_err("batt power supply prop %d not supported\n", psp);
 		return -EINVAL;
@@ -3354,6 +3358,16 @@ static int smb5_batt_set_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_NIGHT_CHARGING:
 		chg->night_chg_flag = val->intval;
 		break;
+	case POWER_SUPPLY_PROP_SMART_BATTERY:
+		chg->diff_fv_val = val->intval;
+		chg->non_fcc_batt_profile_fv_uv -= (chg->diff_fv_val * 1000);
+		chg->batt_profile_fv_uv -= (chg->diff_fv_val * 1000);
+		pr_err("smart_batt has been set with: %d, chg->non_fcc_batt_profile_fv_uv:%d, chg->batt_profile_fv_uv:%d\n",
+				chg->diff_fv_val, chg->non_fcc_batt_profile_fv_uv,
+				chg->batt_profile_fv_uv);
+		vote(chg->fv_votable, BATT_PROFILE_VOTER,
+				chg->batt_profile_fv_uv > 0, chg->batt_profile_fv_uv);
+		break;
 	default:
 		rc = -EINVAL;
 	}
@@ -3384,6 +3398,7 @@ static int smb5_batt_prop_is_writeable(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_WARM_FAKE_CHARGING:
 	case POWER_SUPPLY_PROP_RECHARGE_VBAT:
 	case POWER_SUPPLY_PROP_NIGHT_CHARGING:
+	case POWER_SUPPLY_PROP_SMART_BATTERY:
 //#ifdef CONFIG_FACTORY_BUILD
 	case POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT:
 //#endif

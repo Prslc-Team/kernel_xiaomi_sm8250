@@ -851,6 +851,7 @@ struct smb_charger {
 	int			batt_profile_fcc_ua;
 	int			batt_profile_fv_uv;
 	int			non_fcc_batt_profile_fv_uv;
+	int			diff_fv_val;
 
 	int			usb_icl_delta_ua;
 	int			pulse_cnt;

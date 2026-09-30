@@ -1001,18 +1001,31 @@ static int usbpd_pm_fc2_charge_algo(struct usbpd_pm *pdpm)
 	static int curr_fcc_limit, curr_ibus_limit;
 	int capacity = 0;
 	static int ibus_limit;
+	static int ibus_upgrade, last_curr_ibus_limit;
+	union power_supply_propval pval = {0, };
+	int rc = -1;
+
+	pd_get_batt_capacity(pdpm, &capacity);
+
+	rc = power_supply_get_property(pdpm->sw_psy,
+				POWER_SUPPLY_PROP_SMART_BATTERY, &pval);
+	if (rc < 0)
+		pr_err("Get samrt batt failed, rc = %d\n", rc);
+
 	is_fastcharge_mode = pd_get_fastcharge_mode_enabled(pdpm);
 	if (is_fastcharge_mode) {
-		pm_config.bat_volt_lp_lmt = pdpm->bat_volt_max;
+		pm_config.bat_volt_lp_lmt = pdpm->bat_volt_max - pval.intval;
 		bq_taper_hys_mv = BQ_TAPER_HYS_MV;
 		pm_config.fc2_taper_current = TAPER_DONE_FFC_MA_LN8000;
 	} else {
-		pm_config.bat_volt_lp_lmt = pdpm->non_ffc_bat_volt_max;
+		pm_config.bat_volt_lp_lmt = pdpm->non_ffc_bat_volt_max - pval.intval;
 		bq_taper_hys_mv = NON_FFC_BQ_TAPER_HYS_MV;
 		pm_config.fc2_taper_current = TAPER_DONE_NORMAL_MA;
 	}
 
 	usbpd_set_new_fcc_voter(pdpm);
+	pr_info("pdpm->cp.bms_vbat_mv: %d,pm_config.bat_volt_lp_lmt:%d\n",
+			pdpm->cp.bms_vbat_mv, pm_config.bat_volt_lp_lmt);
 
 	/* if cell vol read from fuel gauge is higher than threshold, vote saft fcc to protect battery */
 	if (!pdpm->use_qcom_gauge && is_fastcharge_mode) {
@@ -1140,14 +1153,14 @@ static int usbpd_pm_fc2_charge_algo(struct usbpd_pm *pdpm)
 
 	/* battery voltage loop*/
 
-	if (pdpm->cp.bms_vbat_mv > pm_config.bat_volt_lp_lmt)
+	if (pdpm->cp.bms_vbat_mv > pm_config.bat_volt_lp_lmt - 5)
 		step_vbat = -pm_config.fc2_steps;
-	else if (pdpm->cp.bms_vbat_mv < pm_config.bat_volt_lp_lmt - 10)
+	else if (pdpm->cp.bms_vbat_mv < pm_config.bat_volt_lp_lmt - 15)
 		step_vbat = pm_config.fc2_steps;
 
 	/* battery charge current loop*/
 	if (!pdpm->use_qcom_gauge) {
-		if (pdpm->cp.ibat_curr < curr_fcc_limit)
+		if (pdpm->cp.ibat_curr < curr_fcc_limit - 100)
 			step_ibat = pm_config.fc2_steps;
 		else if (pdpm->cp.ibat_curr > curr_fcc_limit + 50)
 			step_ibat = -pm_config.fc2_steps;
@@ -1311,8 +1324,27 @@ reg[%d-%d-%d-%d-%d],step[%d-%d-%d-%d-%d-%d-%d-%d],pmconfig[%d-%d-%d,%d-%d-%d-%d]
 	steps = min(sw_ctrl_steps, hw_ctrl_steps);
 	/*pr_info("steps: %d, sw_ctrl_steps:%d, hw_ctrl_steps:%d\n", steps, sw_ctrl_steps, hw_ctrl_steps);*/
 
-	pdpm->request_voltage += steps * STEP_MV_INIT_VBUS;
+	if ((curr_ibus_limit < 3100) && (steps > 0))
+		pdpm->request_voltage += steps * 5;
+	else
+		pdpm->request_voltage += steps * STEP_MV;
 
+	if (step_ibat > 0) {
+		ibus_upgrade += 50;
+		curr_ibus_limit += ibus_upgrade;
+	} else if (step_ibat < 0) {
+		ibus_upgrade -= 50;
+		curr_ibus_limit += ibus_upgrade;
+	} else {
+		curr_ibus_limit = last_curr_ibus_limit;
+	}
+
+	if (curr_ibus_limit > pdpm->apdo_max_curr)
+		curr_ibus_limit = pdpm->apdo_max_curr;
+	if (ibus_upgrade > 10000)
+		ibus_upgrade = 10000;
+
+	last_curr_ibus_limit = curr_ibus_limit;
 	pdpm->request_current = min(pdpm->apdo_max_curr, curr_ibus_limit);
 	/*pr_info("steps: %d, pdpm->request_voltage: %d\n", steps, pdpm->request_voltage);*/
 
