@@ -33,11 +33,6 @@ for cmd in aarch64-linux-gnu-ld arm-linux-gnueabi-ld clang; do
     fi
 done
 
-if [ -d KernelSU ]; then
-    echo "[-] clean KernelSU..."
-    bash KernelSU/kernel/setup.sh --cleanup
-fi
-
 # Enable ccache for speed up compiling 
 export CCACHE_DIR="$HOME/.cache/ccache_mikernel"
 export CC="ccache gcc"
@@ -74,43 +69,14 @@ fi
 echo "[clang --version]:"
 clang --version
 
-# Initialize variables
-KERNEL_SRC=$(pwd)
-KPM_ENABLE=0
-KSU_VERSION=$2
-TARGET_SYSTEM=$3
+TARGET_SYSTEM=$2
+
+if [ -n "$TARGET_SYSTEM" ] && [ "$TARGET_SYSTEM" != "aosp" ] && [ "$TARGET_SYSTEM" != "miui" ]; then
+    echo "Error: Unknown target system [$TARGET_SYSTEM]. Expected: aosp or miui."
+    exit 1
+fi
 
 echo "TARGET_DEVICE: $TARGET_DEVICE"
-KSU_ENABLE=$([[ "$KSU_VERSION" == "rksu" || "$KSU_VERSION" == "sukisu-kpm" || "$KSU_VERSION" == "sukisu" ]] && echo 1 || echo 0)
-
-# KernelSU setup
-case "$KSU_VERSION" in
-    rksu)
-        KSU_ZIP_STR=RKSU
-        echo "RKSU is enabled"
-        curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s main
-        ;;
-    sukisu)
-        KSU_ZIP_STR=SukiSU
-        echo "SukiSU is enabled"
-        curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s nongki
-        ;;
-    sukisu-kpm)
-        KPM_ENABLE=1
-        KSU_ZIP_STR=SukiSU-KPM
-        echo "SukiSU & KPM is enabled"
-        curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s nongki
-        ;;
-    resukisu)
-        KSU_ZIP_STR=ReSukiSU
-        echo "ReSukiSU is enabled"
-        curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
-        ;;
-    *)
-        KSU_ZIP_STR=NoKernelSU
-        echo "KSU is disabled"
-        ;;
-esac
 
 echo "Cleaning..."
 rm -rf out/
@@ -134,8 +100,11 @@ Build_MIUI(){
 
     dts_source=arch/arm64/boot/dts/vendor/qcom
 
-    # Backup dts
+    # Backup dts (drop any stale backup left behind by an aborted run)
+    rm -rf .dts.bak
     cp -a ${dts_source} .dts.bak
+    # Restore the original dts even if the build aborts midway
+    trap 'rm -rf ${dts_source}; mv .dts.bak ${dts_source}' EXIT
 
     # Correct panel dimensions on MIUI builds
     sed -i 's/<154>/<1537>/g' ${dts_source}/dsi-panel-j1s*
@@ -229,27 +198,6 @@ SET_CONFIG() {
             -e MI_RECLAIM \
             -e RTMM
     fi
-
-    if [ "$KSU_ENABLE" -eq 1 ]; then
-        scripts/config --file out/.config -e KSU
-    else
-        scripts/config --file out/.config -d KSU
-    fi
-
-    # Enable KSU_MANUAL_HOOK for sukisu, rksu, and resukisu
-    if [[ "$KSU_VERSION" == "sukisu" || "$KSU_VERSION" == "rksu" || "$KSU_VERSION" == "resukisu" ]]; then
-        scripts/config --file out/.config -e KSU_MANUAL_HOOK
-    else
-        scripts/config --file out/.config -d KSU_MANUAL_HOOK
-    fi
-
-    # Config KPM
-    if [ "$KPM_ENABLE" -eq 1 ]; then
-        scripts/config --file out/.config \
-            -e KPM \
-            -e KALLSYMS \
-            -e KALLSYMS_ALL
-    fi
 }
 
 Image_Repack() {
@@ -260,11 +208,6 @@ Image_Repack() {
         exit 1
     fi
 
-    # KPM Patch
-    if [[ "$KPM_ENABLE" -eq 1 && "$KSU_VERSION" == "sukisu-ultra" ]]; then
-        Patch_KPM
-    fi
-
     echo "Generating [out/arch/arm64/boot/dtb]......"
     find out/arch/arm64/boot/dts -name '*.dtb' -exec cat {} + >out/arch/arm64/boot/dtb
 
@@ -272,6 +215,7 @@ Image_Repack() {
     if [ "$1" == "MIUI" ]; then
         rm -rf ${dts_source}
         mv .dts.bak ${dts_source}
+        trap - EXIT
     fi
 
     rm -rf anykernel/kernels/
@@ -281,32 +225,15 @@ Image_Repack() {
     cd anykernel
 
     if [ "$1" == "MIUI" ]; then
-        ZIP_FILENAME=Kernel_MIUI_${TARGET_DEVICE}_${KSU_ZIP_STR}_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip
+        ZIP_FILENAME=Kernel_MIUI_${TARGET_DEVICE}_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip
     else
-        ZIP_FILENAME=Kernel_AOSP_${TARGET_DEVICE}_${KSU_ZIP_STR}_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip
+        ZIP_FILENAME=Kernel_AOSP_${TARGET_DEVICE}_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip
     fi
 
     zip -r9 $ZIP_FILENAME ./* -x .git .gitignore out/ ./*.zip
     mv $ZIP_FILENAME ../
     cd ..
     echo "Done. The flashable zip is: [./$ZIP_FILENAME]"
-}
-
-Patch_KPM() {
-    cd out/arch/arm64/boot
-    curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch
-    chmod +x patch
-    ./patch
-
-    if [ $? -eq 0 ]; then
-        rm -f Image
-        mv oImage Image
-        echo "Image file repair complete"
-    else
-        echo "KPM Patch Failed, Use Original Image"
-    fi
-
-    cd $KERNEL_SRC
 }
 
 if [ "$TARGET_SYSTEM" == "aosp" ]; then
